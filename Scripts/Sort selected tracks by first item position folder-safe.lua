@@ -5,11 +5,13 @@
  * Original Repository URI: https://github.com/X-Raym/REAPER-ReaScripts
  * Licence: GPL v3
  * REAPER: 5.90
- * Version: 1.0.0
+ * Version: 1.0.1
 --]]
 
 --[[
  * Changelog:
+ * v1.0.1 (2026-04-29)
+  # Keep unselected sibling slots anchored during the execution phase.
  * v1.0.0 (2026-04-29)
   + Folder-safe derivative of X-Raym's selected track sorter.
   + Treats folder tracks as movable blocks and sorts selected children within each folder separately.
@@ -337,21 +339,27 @@ end
 function M.reorder_scope(r, parent)
   local desired = parent.desiredChildren or parent.children
 
-  for desired_index, desired_node in ipairs(desired) do
+  for desired_index = #desired, 1, -1 do
+    local desired_node = desired[desired_index]
+
     if desired_node.selected then
       local children = current_children(r, parent)
       local current_index = index_of_node(children, desired_node)
+      local before_node = desired[desired_index + 1]
+      local before_index = before_node and index_of_node(children, before_node) or nil
 
-      if current_index and current_index ~= desired_index then
-        local before_node
+      if current_index then
+        local should_move = false
 
-        if current_index > desired_index then
-          before_node = children[desired_index]
+        if before_node then
+          should_move = before_index ~= current_index + 1
         else
-          before_node = children[desired_index + 1]
+          should_move = current_index ~= #children
         end
 
-        move_node_before(r, parent, desired_node, before_node)
+        if should_move then
+          move_node_before(r, parent, desired_node, before_node)
+        end
       end
     end
   end
