@@ -77,10 +77,13 @@ assert_order("ties keep original sibling order", {
   track("C", 0, { 1 }, true),
 }, { "C", "A", "B" })
 
-local function make_mock_reaper(tracks)
+local function make_mock_reaper(tracks, options)
+  options = options or {}
+
   local mock = {
     tracks = tracks,
     reorderCalls = {},
+    preserveFolderDepthsOnReorder = options.preserveFolderDepthsOnReorder and true or false,
   }
 
   local function track_index(track)
@@ -140,11 +143,14 @@ local function make_mock_reaper(tracks)
 
     local function visit(parent)
       for _, node in ipairs(parent.children) do
-        node.track.folderDepth = #node.children > 0 and 1 or 0
+        if not mock.preserveFolderDepthsOnReorder then
+          node.track.folderDepth = #node.children > 0 and 1 or 0
+        end
+
         tracks_out[#tracks_out + 1] = node.track
         visit(node)
 
-        if #node.children > 0 then
+        if not mock.preserveFolderDepthsOnReorder and #node.children > 0 then
           tracks_out[#tracks_out].folderDepth = tracks_out[#tracks_out].folderDepth - 1
         end
       end
@@ -246,6 +252,15 @@ local function make_mock_reaper(tracks)
 
   function mock.SetTrackSelected(tr, selected)
     tr.selected = selected and true or false
+  end
+
+  function mock.SetMediaTrackInfo_Value(tr, key, value)
+    if key == "I_FOLDERDEPTH" then
+      tr.folderDepth = value
+      return true
+    end
+
+    return false
   end
 
   function mock.ReorderSelectedTracks(before_track_index, make_prev_folder)
@@ -359,8 +374,8 @@ local function assert_same_selection(name, actual, expected)
   end
 end
 
-local function assert_run(name, tracks, expected_ids, expected_depths, expected_modes)
-  local mock = make_mock_reaper(tracks)
+local function assert_run(name, tracks, expected_ids, expected_depths, expected_modes, options)
+  local mock = make_mock_reaper(tracks, options)
   local initial_selection = selected_tracks(mock)
 
   assert(sorter.run(mock) == true)
@@ -415,5 +430,25 @@ assert_run("execution uses normal folder mode before a later child", {
   { id = "B", folderDepth = 0, selected = true, items = { { pos = 10 } } },
   { id = "U2", folderDepth = -1, selected = false, items = { { pos = 40 } } },
 }, { "Folder", "B", "U1", "A", "U2" }, { 1, 0, 0, 0, -1 }, { 0, 1 })
+
+assert_run("execution repairs nested folder closure after moving a folder block", {
+  { id = "SFX", folderDepth = 1, selected = true, items = {} },
+  { id = "Intro", folderDepth = 1, selected = true, items = {} },
+  { id = "Late A", folderDepth = 0, selected = true, items = { { pos = 30 } } },
+  { id = "Late B", folderDepth = 0, selected = true, items = { { pos = 40 } } },
+  { id = "Swoosh Folder", folderDepth = 1, selected = true, items = { { pos = 10 } } },
+  { id = "Swoosh Child", folderDepth = -2, selected = true, items = { { pos = 12 } } },
+  { id = "After Intro", folderDepth = -1, selected = true, items = { { pos = 50 } } },
+}, {
+  "SFX",
+  "Intro",
+  "Swoosh Folder",
+  "Swoosh Child",
+  "Late A",
+  "Late B",
+  "After Intro",
+}, { 1, 1, 1, -1, 0, -1, -1 }, nil, {
+  preserveFolderDepthsOnReorder = true,
+})
 
 print("ok")

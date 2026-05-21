@@ -5,11 +5,13 @@
  * Original Repository URI: https://github.com/X-Raym/REAPER-ReaScripts
  * Licence: GPL v3
  * REAPER: 5.90
- * Version: 1.0.1
+ * Version: 1.0.2
 --]]
 
 --[[
  * Changelog:
+ * v1.0.2 (2026-05-21)
+  # Repair folder depth markers after each move so nested folder closures stay attached to their original tree.
  * v1.0.1 (2026-04-29)
   # Keep unselected sibling slots anchored during the execution phase.
  * v1.0.0 (2026-04-29)
@@ -299,6 +301,55 @@ local function current_block_end_track_number(r, node)
   return last
 end
 
+local function folder_depth_for_node(order_by_parent, node)
+  local opens = #node.children > 0 and 1 or 0
+  local closes = 0
+
+  if #node.children == 0 then
+    local child = node
+    local parent = node.parent
+
+    while parent and not parent.isRoot do
+      local siblings = order_by_parent[parent]
+
+      if not siblings or siblings[#siblings] ~= child then
+        break
+      end
+
+      closes = closes + 1
+      child = parent
+      parent = parent.parent
+    end
+  end
+
+  return opens - closes
+end
+
+local function collect_current_order(r, node, order_by_parent, nodes)
+  local children = current_children(r, node)
+  order_by_parent[node] = children
+
+  for _, child in ipairs(children) do
+    nodes[#nodes + 1] = child
+    collect_current_order(r, child, order_by_parent, nodes)
+  end
+end
+
+function M.repair_folder_depths(r, root)
+  local order_by_parent = {}
+  local nodes = {}
+
+  collect_current_order(r, root, order_by_parent, nodes)
+
+  for _, node in ipairs(nodes) do
+    r.SetMediaTrackInfo_Value(
+      node.track,
+      "I_FOLDERDEPTH",
+      folder_depth_for_node(order_by_parent, node)
+    )
+  end
+end
+
 local function insertion_mode(r, parent, before_node)
   if parent.isRoot then
     return 0
@@ -328,15 +379,22 @@ local function insertion_index(r, parent, before_node)
   return current_block_end_track_number(r, parent)
 end
 
-local function move_node_before(r, parent, node, before_node)
+local function move_node_before(r, root, parent, node, before_node)
   select_node_block(r, node)
-  return r.ReorderSelectedTracks(
+  local ok = r.ReorderSelectedTracks(
     insertion_index(r, parent, before_node),
     insertion_mode(r, parent, before_node)
   )
+
+  if ok ~= false then
+    M.repair_folder_depths(r, root)
+  end
+
+  return ok
 end
 
-function M.reorder_scope(r, parent)
+function M.reorder_scope(r, parent, root)
+  root = root or parent
   local desired = parent.desiredChildren or parent.children
 
   for desired_index = #desired, 1, -1 do
@@ -358,19 +416,21 @@ function M.reorder_scope(r, parent)
         end
 
         if should_move then
-          move_node_before(r, parent, desired_node, before_node)
+          move_node_before(r, root, parent, desired_node, before_node)
         end
       end
     end
   end
 end
 
-function M.execute_sort(r, root)
-  for _, child in ipairs(root.children) do
-    M.execute_sort(r, child)
+function M.execute_sort(r, node, root)
+  root = root or node
+
+  for _, child in ipairs(node.children) do
+    M.execute_sort(r, child, root)
   end
 
-  M.reorder_scope(r, root)
+  M.reorder_scope(r, node, root)
 end
 
 function M.run(r)
@@ -393,6 +453,7 @@ function M.run(r)
       M.execute_sort(r, root)
     end
 
+    M.repair_folder_depths(r, root)
     M.restore_selected_tracks(r, selected_tracks)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
